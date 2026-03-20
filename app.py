@@ -1,7 +1,7 @@
 """
 🍌 나노바나나2 이미지 생성기
 대본 → 분석 → 초단위 분할 → 프롬프트 생성 → 이미지 생성
-Gemini API (gemini-3.1-flash-image-preview) 기반
+Gemini API + Freepik API 지원
 """
 
 import streamlit as st
@@ -10,6 +10,7 @@ import zipfile
 import base64
 import time
 import re
+import requests
 
 # ─────────────────────────────────────────────
 # 기본 스타일 가이드 (디폴트값)
@@ -86,8 +87,10 @@ st.markdown("""
 # Session State 초기화
 # ─────────────────────────────────────────────
 defaults = {
-    "api_key": "",
-    "api_key_saved": False,
+    "gemini_api_key": "",
+    "gemini_key_saved": False,
+    "freepik_api_key": "",
+    "freepik_key_saved": False,
     "script_text": "",
     "analysis": "",
     "segments": [],
@@ -111,87 +114,119 @@ for k, v in defaults.items():
 with st.sidebar:
     st.markdown("## ⚙️ 설정")
 
-    # API Key
-    st.markdown("### 🔑 Gemini API Key")
-    api_input = st.text_input(
-        "API Key 입력", value=st.session_state.api_key,
-        type="password", placeholder="AIza...", label_visibility="collapsed",
+    # 이미지 생성 플랫폼 선택
+    st.markdown("### 🎨 이미지 생성 플랫폼")
+    platform = st.radio(
+        "플랫폼 선택",
+        ["Gemini (나노바나나2)", "Freepik (Mystic)"],
+        index=0,
+        label_visibility="collapsed",
     )
-    if st.button("💾 API Key 저장", use_container_width=True):
-        if api_input.strip():
-            st.session_state.api_key = api_input.strip()
-            st.session_state.api_key_saved = True
-            st.success("✅ API Key 저장됨!")
-        else:
-            st.error("API Key를 입력해주세요.")
-    if st.session_state.api_key_saved:
-        st.caption(f"🔐 저장됨: `{st.session_state.api_key[:8]}...`")
 
     st.divider()
 
-    # 분할 설정 — 5초~30초, 5초 단위
+    # Gemini API Key
+    st.markdown("### 🔑 Gemini API Key")
+    gemini_input = st.text_input(
+        "Gemini Key", value=st.session_state.gemini_api_key,
+        type="password", placeholder="AIza...", label_visibility="collapsed",
+    )
+    if st.button("💾 Gemini Key 저장", use_container_width=True):
+        if gemini_input.strip():
+            st.session_state.gemini_api_key = gemini_input.strip()
+            st.session_state.gemini_key_saved = True
+            st.success("✅ Gemini Key 저장됨!")
+        else:
+            st.error("Key를 입력해주세요.")
+    if st.session_state.gemini_key_saved:
+        st.caption(f"🔐 Gemini: `{st.session_state.gemini_api_key[:8]}...`")
+
+    st.divider()
+
+    # Freepik API Key
+    st.markdown("### 🔑 Freepik API Key")
+    freepik_input = st.text_input(
+        "Freepik Key", value=st.session_state.freepik_api_key,
+        type="password", placeholder="fpk_...", label_visibility="collapsed",
+    )
+    if st.button("💾 Freepik Key 저장", use_container_width=True):
+        if freepik_input.strip():
+            st.session_state.freepik_api_key = freepik_input.strip()
+            st.session_state.freepik_key_saved = True
+            st.success("✅ Freepik Key 저장됨!")
+        else:
+            st.error("Key를 입력해주세요.")
+    if st.session_state.freepik_key_saved:
+        st.caption(f"🔐 Freepik: `{st.session_state.freepik_api_key[:8]}...`")
+
+    st.divider()
+
+    # 분할 설정
     st.markdown("### ✂️ 분할 설정")
     seconds_per_cut = st.select_slider(
-        "컷당 초수",
-        options=[5, 10, 15, 20, 25, 30],
-        value=5,
+        "컷당 초수", options=[5, 10, 15, 20, 25, 30], value=5,
         help="5초 단위로 선택 가능 (5초~30초)",
     )
     chars_per_second = st.slider("1초당 글자 수", 3.0, 6.0, 4.5, 0.5)
     chars_per_cut = int(seconds_per_cut * chars_per_second)
-    st.info(f"📐 **{seconds_per_cut}초** × {chars_per_second}자 = 컷당 약 **{chars_per_cut}자** 기준")
+    st.info(f"📐 **{seconds_per_cut}초** × {chars_per_second}자 = 컷당 약 **{chars_per_cut}자**")
 
     st.divider()
 
     # 언어 설정
     st.markdown("### 🌐 프롬프트 언어")
     prompt_language = st.selectbox(
-        "이미지 프롬프트 언어 선택",
-        list(LANGUAGE_INSTRUCTIONS.keys()),
-        index=0,
-        help="생성되는 이미지 프롬프트의 언어를 선택합니다.",
+        "언어 선택", list(LANGUAGE_INSTRUCTIONS.keys()), index=0,
     )
 
     st.divider()
 
     # 모델 설정
     st.markdown("### 🤖 모델 설정")
-    image_model = st.selectbox(
-        "이미지 생성 모델",
-        [
-            "gemini-3.1-flash-image-preview",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-        ],
-        index=0,
-        help="나노바나나2 = gemini-3.1-flash-image-preview",
-    )
-    text_model = st.selectbox(
-        "텍스트 분석 모델",
-        ["gemini-2.5-flash", "gemini-2.0-flash"],
-        index=0,
-    )
+    if platform == "Gemini (나노바나나2)":
+        image_model = st.selectbox(
+            "Gemini 이미지 모델",
+            ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview", "gemini-2.5-flash-image"],
+            index=0,
+        )
+        freepik_model = None
+    else:
+        image_model = None
+        freepik_model = st.selectbox(
+            "Freepik 모델",
+            ["realism", "fluid", "flexible", "zen", "super_real", "editorial_portraits"],
+            index=0,
+            help="realism=사실적, fluid=프롬프트 충실, flexible=다용도, zen=부드러운",
+        )
+        freepik_aspect = st.selectbox(
+            "Freepik 비율",
+            ["square_1_1", "widescreen_16_9", "social_story_9_16", "classic_4_3", "traditional_3_4"],
+            index=0,
+        )
+        freepik_resolution = st.selectbox("Freepik 해상도", ["1k", "2k", "4k"], index=1)
+
+    text_model = st.selectbox("텍스트 분석 모델 (Gemini)", ["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
 
     st.divider()
     if st.button("🔄 전체 초기화", use_container_width=True):
         for k, v in defaults.items():
-            if k not in ("api_key", "api_key_saved"):
+            if k not in ("gemini_api_key", "gemini_key_saved", "freepik_api_key", "freepik_key_saved"):
                 st.session_state[k] = v
         st.rerun()
 
 
 # ─────────────────────────────────────────────
-# Gemini API 헬퍼 함수들
+# Gemini API 헬퍼
 # ─────────────────────────────────────────────
-def get_client():
+def get_gemini_client():
     try:
         from google import genai
-        return genai.Client(api_key=st.session_state.api_key)
+        return genai.Client(api_key=st.session_state.gemini_api_key)
     except ImportError:
-        st.error("❌ `google-genai` 패키지가 필요합니다. `pip install google-genai`")
+        st.error("❌ `google-genai` 패키지가 필요합니다.")
         return None
     except Exception as e:
-        st.error(f"❌ 클라이언트 생성 실패: {e}")
+        st.error(f"❌ Gemini 클라이언트 실패: {e}")
         return None
 
 
@@ -204,49 +239,113 @@ def call_text_model(client, prompt, model_name):
         return None
 
 
-def generate_image(client, prompt, model_name):
-    """나노바나나 계열 이미지 생성 (generateContent 사용)"""
+def generate_image_gemini(client, prompt, model_name):
+    """나노바나나 계열 이미지 생성"""
     try:
         from google.genai import types
         response = client.models.generate_content(
-            model=model_name,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-            ),
+            model=model_name, contents=[prompt],
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
         for part in response.parts:
             if part.inline_data is not None:
                 return part.inline_data.data
         return None
     except Exception as e:
-        st.error(f"❌ 이미지 생성 실패: {e}")
+        st.error(f"❌ Gemini 이미지 생성 실패: {e}")
         return None
 
 
 # ─────────────────────────────────────────────
-# 대본 분할 함수 (로컬)
+# Freepik API 헬퍼
+# ─────────────────────────────────────────────
+def generate_image_freepik(prompt, model, aspect_ratio, resolution):
+    """Freepik Mystic API로 이미지 생성 (비동기: 생성요청 → 폴링)"""
+    api_key = st.session_state.freepik_api_key
+    headers = {
+        "x-freepik-api-key": api_key,
+        "Content-Type": "application/json",
+    }
+
+    # 1) 생성 요청
+    payload = {
+        "prompt": prompt,
+        "model": model,
+        "aspect_ratio": aspect_ratio,
+        "resolution": resolution,
+        "filter_nsfw": True,
+    }
+
+    try:
+        resp = requests.post(
+            "https://api.freepik.com/v1/ai/mystic",
+            headers=headers, json=payload, timeout=30,
+        )
+        if resp.status_code != 200:
+            st.error(f"❌ Freepik 요청 실패 ({resp.status_code}): {resp.text[:200]}")
+            return None
+
+        data = resp.json().get("data", {})
+        task_id = data.get("task_id")
+        if not task_id:
+            st.error("❌ Freepik task_id를 받지 못했습니다.")
+            return None
+
+    except Exception as e:
+        st.error(f"❌ Freepik 요청 오류: {e}")
+        return None
+
+    # 2) 폴링 (최대 60초)
+    for attempt in range(30):
+        time.sleep(2)
+        try:
+            poll_resp = requests.get(
+                f"https://api.freepik.com/v1/ai/mystic/{task_id}",
+                headers={"x-freepik-api-key": api_key}, timeout=15,
+            )
+            if poll_resp.status_code != 200:
+                continue
+
+            poll_data = poll_resp.json().get("data", {})
+            status = poll_data.get("status", "")
+
+            if status == "COMPLETED":
+                generated = poll_data.get("generated", [])
+                if generated:
+                    # URL에서 이미지 다운로드
+                    img_url = generated[0]
+                    img_resp = requests.get(img_url, timeout=30)
+                    if img_resp.status_code == 200:
+                        return img_resp.content
+                return None
+
+            elif status in ("FAILED", "ERROR"):
+                st.error(f"❌ Freepik 생성 실패: {status}")
+                return None
+
+        except Exception:
+            continue
+
+    st.error("❌ Freepik 시간 초과 (60초)")
+    return None
+
+
+# ─────────────────────────────────────────────
+# 대본 분할 함수
 # ─────────────────────────────────────────────
 def split_script_locally(script_text, max_chars):
-    """한국어 대본을 max_chars 글자 단위로 문장 경계를 존중하며 분할"""
     lines = [line.strip() for line in script_text.strip().split("\n") if line.strip()]
     full_text = " ".join(lines)
 
-    # 문장 분리
     sentences = re.split(r'(?<=[.?!。])\s*', full_text)
     sentences = [s.strip() for s in sentences if s.strip()]
 
-    # 문장이 분리 안 된 경우 쉼표로 분리
     if len(sentences) <= 1 and len(full_text) > max_chars:
         sentences = re.split(r'(?<=[,，、])\s*', full_text)
         sentences = [s.strip() for s in sentences if s.strip()]
 
-    # 그래도 분리 안 되면 글자 수로 강제 분할
     if len(sentences) <= 1 and len(full_text) > max_chars:
-        segments = []
-        for i in range(0, len(full_text), max_chars):
-            segments.append(full_text[i:i + max_chars])
-        return segments
+        return [full_text[i:i + max_chars] for i in range(0, len(full_text), max_chars)]
 
     segments = []
     current = ""
@@ -275,7 +374,6 @@ def split_script_locally(script_text, max_chars):
 
     if current:
         segments.append(current)
-
     return segments
 
 
@@ -283,10 +381,21 @@ def split_script_locally(script_text, max_chars):
 # 메인 영역
 # ─────────────────────────────────────────────
 st.markdown('<div class="main-title">🍌 나노바나나2 이미지 생성기</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">대본 → 분석 → 초단위 분할 → 프롬프트 생성 → 이미지 자동 생성</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">대본 → 분석 → 초단위 분할 → 프롬프트 생성 → 이미지 자동 생성 (Gemini / Freepik)</div>', unsafe_allow_html=True)
 
-if not st.session_state.api_key:
-    st.warning("⚠️ 사이드바에서 Gemini API Key를 먼저 입력해주세요.")
+# API Key 체크
+if platform == "Gemini (나노바나나2)" and not st.session_state.gemini_api_key:
+    st.warning("⚠️ 사이드바에서 Gemini API Key를 입력해주세요.")
+    st.stop()
+elif platform == "Freepik (Mystic)" and not st.session_state.freepik_api_key:
+    st.warning("⚠️ 사이드바에서 Freepik API Key를 입력해주세요.")
+    if not st.session_state.gemini_api_key:
+        st.warning("⚠️ 텍스트 분석용 Gemini API Key도 필요합니다.")
+    st.stop()
+
+# Gemini key는 텍스트 분석에 항상 필요
+if not st.session_state.gemini_api_key:
+    st.warning("⚠️ 텍스트 분석을 위해 Gemini API Key가 필요합니다.")
     st.stop()
 
 # ─── 탭 구성 ───
@@ -317,7 +426,6 @@ with tab_guide:
 # ═══════════════════════════════════════════════
 with tab_script:
 
-    # ─── 대본 입력 ───
     st.markdown("### 📄 대본 입력")
     script_input = st.text_area(
         "대본 입력", value=st.session_state.script_text, height=200,
@@ -346,7 +454,7 @@ with tab_script:
 
         if not st.session_state.analysis:
             with st.spinner("🔍 대본을 분석하는 중..."):
-                client = get_client()
+                client = get_gemini_client()
                 if client:
                     analysis_prompt = f"""다음 유튜브 대본을 분석해주세요.
 
@@ -383,17 +491,15 @@ with tab_script:
             with st.spinner("✂️ 대본을 분할하는 중..."):
                 segs = split_script_locally(st.session_state.script_text, chars_per_cut)
                 st.session_state.segments = segs
-                numbered = [f"{i+1}. {s}" for i, s in enumerate(segs)]
-                st.session_state.segments_text = "\n".join(numbered)
+                st.session_state.segments_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(segs)])
                 st.rerun()
 
         if st.session_state.segments and not st.session_state.segments_confirmed:
-            st.caption(f"총 **{len(st.session_state.segments)}**개 장면으로 분할됨 ({seconds_per_cut}초 기준). 수정 후 확정하세요.")
+            st.caption(f"총 **{len(st.session_state.segments)}**개 장면 ({seconds_per_cut}초 기준). 수정 후 확정하세요.")
             edited_segments = st.text_area(
-                "분할 결과 편집", value=st.session_state.segments_text,
+                "분할 편집", value=st.session_state.segments_text,
                 height=300, label_visibility="collapsed",
             )
-
             col_re, col_confirm = st.columns(2)
             with col_re:
                 if st.button("🔄 다시 분할", use_container_width=True):
@@ -403,11 +509,8 @@ with tab_script:
             with col_confirm:
                 if st.button("✅ 분할 확정 → 프롬프트 생성", use_container_width=True, type="primary"):
                     lines = [l.strip() for l in edited_segments.strip().split("\n") if l.strip()]
-                    parsed = []
-                    for line in lines:
-                        cleaned = re.sub(r'^\d+[\.\)]\s*', '', line)
-                        if cleaned:
-                            parsed.append(cleaned)
+                    parsed = [re.sub(r'^\d+[\.\)]\s*', '', l) for l in lines]
+                    parsed = [p for p in parsed if p]
                     st.session_state.segments = parsed
                     st.session_state.segments_text = edited_segments
                     st.session_state.segments_confirmed = True
@@ -415,7 +518,7 @@ with tab_script:
                     st.rerun()
 
         if st.session_state.segments_confirmed:
-            with st.expander(f"✅ 확정된 분할 ({len(st.session_state.segments)}개 장면)", expanded=False):
+            with st.expander(f"✅ 확정된 분할 ({len(st.session_state.segments)}개)", expanded=False):
                 for i, seg in enumerate(st.session_state.segments):
                     st.markdown(f"**{i+1}.** {seg}")
 
@@ -430,7 +533,7 @@ with tab_script:
 
         if not st.session_state.prompts:
             with st.spinner("🎨 프롬프트를 생성하는 중..."):
-                client = get_client()
+                client = get_gemini_client()
                 if client:
                     seg_list = "\n".join([f"{i+1}. {s}" for i, s in enumerate(st.session_state.segments)])
                     lang_instruction = LANGUAGE_INSTRUCTIONS[prompt_language]
@@ -475,17 +578,17 @@ with tab_script:
                             prompts_parsed.append(current_prompt)
 
                         st.session_state.prompts = prompts_parsed
-                        numbered_prompts = [f"{i+1}) {p}" for i, p in enumerate(prompts_parsed)]
-                        st.session_state.prompts_text = "\n\n".join(numbered_prompts)
+                        st.session_state.prompts_text = "\n\n".join(
+                            [f"{i+1}) {p}" for i, p in enumerate(prompts_parsed)]
+                        )
                         st.rerun()
 
         if st.session_state.prompts and not st.session_state.prompts_confirmed:
-            st.caption(f"총 **{len(st.session_state.prompts)}**개 프롬프트 생성됨. 수정 후 확정하세요.")
+            st.caption(f"총 **{len(st.session_state.prompts)}**개 프롬프트. 수정 후 확정하세요.")
             edited_prompts = st.text_area(
                 "프롬프트 편집", value=st.session_state.prompts_text,
                 height=400, label_visibility="collapsed",
             )
-
             col_re2, col_confirm2 = st.columns(2)
             with col_re2:
                 if st.button("🔄 프롬프트 재생성", use_container_width=True):
@@ -517,54 +620,69 @@ with tab_script:
     # ═══ STEP 4: 이미지 생성 ═══
     if st.session_state.step >= 4 and st.session_state.prompts_confirmed:
         st.divider()
+        platform_label = "Gemini 나노바나나2" if platform == "Gemini (나노바나나2)" else "Freepik Mystic"
         st.markdown(
-            f'<span class="step-badge">STEP 4</span> **이미지 생성** (모델: `{image_model}`)',
+            f'<span class="step-badge">STEP 4</span> **이미지 생성** ({platform_label})',
             unsafe_allow_html=True,
         )
 
         if not st.session_state.images:
-            client = get_client()
-            if client:
-                total = len(st.session_state.prompts)
-                progress_bar = st.progress(0, text=f"이미지 생성 준비 중... (0/{total})")
-                images_result = []
-                prompts_used = []
-                status_container = st.empty()
+            total = len(st.session_state.prompts)
+            progress_bar = st.progress(0, text=f"이미지 생성 준비 중... (0/{total})")
+            images_result = []
+            prompts_used = []
+            status_container = st.empty()
 
+            if platform == "Gemini (나노바나나2)":
+                client = get_gemini_client()
+                if client:
+                    for i, prompt_text in enumerate(st.session_state.prompts):
+                        status_container.info(f"🎨 {i+1}/{total} Gemini로 생성 중...")
+                        progress_bar.progress(i / total, text=f"생성 중... ({i}/{total})")
+
+                        img_data = generate_image_gemini(client, prompt_text, image_model)
+
+                        if img_data is not None:
+                            if isinstance(img_data, bytes):
+                                images_result.append(img_data)
+                            else:
+                                try:
+                                    images_result.append(base64.b64decode(img_data))
+                                except Exception:
+                                    images_result.append(img_data)
+                        else:
+                            images_result.append(None)
+                        prompts_used.append(prompt_text)
+
+                        if i < total - 1:
+                            time.sleep(2)
+
+            else:  # Freepik
                 for i, prompt_text in enumerate(st.session_state.prompts):
-                    status_container.info(f"🎨 {i+1}/{total} 번째 이미지 생성 중...")
+                    status_container.info(f"🎨 {i+1}/{total} Freepik으로 생성 중... (최대 60초 소요)")
                     progress_bar.progress(i / total, text=f"생성 중... ({i}/{total})")
 
-                    img_data = generate_image(client, prompt_text, image_model)
+                    img_data = generate_image_freepik(
+                        prompt_text, freepik_model, freepik_aspect, freepik_resolution
+                    )
 
-                    if img_data is not None:
-                        if isinstance(img_data, bytes):
-                            images_result.append(img_data)
-                        else:
-                            try:
-                                images_result.append(base64.b64decode(img_data))
-                            except Exception:
-                                images_result.append(img_data)
-                        prompts_used.append(prompt_text)
-                    else:
-                        images_result.append(None)
-                        prompts_used.append(prompt_text)
+                    images_result.append(img_data)
+                    prompts_used.append(prompt_text)
 
-                    # API 레이트 리밋 방지
                     if i < total - 1:
-                        time.sleep(2)
+                        time.sleep(1)
 
-                progress_bar.progress(1.0, text=f"✅ 완료! ({total}/{total})")
-                valid = sum(1 for x in images_result if x is not None)
-                status_container.success(f"✅ 총 {valid}개 이미지 생성 완료!")
+            progress_bar.progress(1.0, text=f"✅ 완료! ({total}/{total})")
+            valid = sum(1 for x in images_result if x is not None)
+            status_container.success(f"✅ 총 {valid}개 이미지 생성 완료!")
 
-                st.session_state.images = images_result
-                st.session_state.image_prompts_used = prompts_used
-                st.rerun()
+            st.session_state.images = images_result
+            st.session_state.image_prompts_used = prompts_used
+            st.rerun()
 
         if st.session_state.images:
             valid = sum(1 for x in st.session_state.images if x is not None)
-            st.success(f"✅ {valid}개 이미지가 생성되었습니다. '🖼️ 생성된 이미지' 탭에서 확인하세요!")
+            st.success(f"✅ {valid}개 이미지 생성됨! '🖼️ 생성된 이미지' 탭에서 확인하세요!")
 
 
 # ═══════════════════════════════════════════════
@@ -606,10 +724,9 @@ with tab_result:
         st.divider()
 
         # 이미지 그리드 (2열)
-        cols_per_row = 2
-        for row_start in range(0, len(images), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for col_idx in range(cols_per_row):
+        for row_start in range(0, len(images), 2):
+            cols = st.columns(2)
+            for col_idx in range(2):
                 img_idx = row_start + col_idx
                 if img_idx >= len(images):
                     break
@@ -620,11 +737,9 @@ with tab_result:
                     if img_data is not None:
                         st.image(img_data, use_container_width=True)
                         st.download_button(
-                            label=f"💾 다운로드",
-                            data=img_data,
+                            label="💾 다운로드", data=img_data,
                             file_name=f"scene_{img_idx+1:03d}.png",
-                            mime="image/png",
-                            key=f"dl_{img_idx}",
+                            mime="image/png", key=f"dl_{img_idx}",
                             use_container_width=True,
                         )
                     else:
