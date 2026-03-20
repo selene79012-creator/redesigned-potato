@@ -244,13 +244,13 @@ with st.sidebar:
         st.caption(f"ℹ️ {FREEPIK_MODELS[selected_freepik_model]['desc']}")
         gemini_image_model = None
 
-        # Freepik 공통 설정
-        fp_aspect = st.selectbox("비율", ["square_1_1", "widescreen_16_9", "social_story_9_16", "classic_4_3", "traditional_3_4", "standard_3_2", "portrait_2_3"], index=1)
-
+        # Freepik 비율 설정 (Mystic vs Standard 형식이 다름)
         model_info = FREEPIK_MODELS[selected_freepik_model]
         if model_info["type"] == "mystic":
+            fp_aspect = st.selectbox("비율", ["square_1_1", "widescreen_16_9", "social_story_9_16", "classic_4_3", "traditional_3_4", "standard_3_2", "portrait_2_3"], index=1)
             fp_resolution = st.selectbox("해상도", ["1k", "2k", "4k"], index=1)
         else:
+            fp_aspect = st.selectbox("비율", ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"], index=1)
             fp_resolution = "2k"
 
     text_model = st.selectbox("텍스트 분석 (Gemini)", ["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
